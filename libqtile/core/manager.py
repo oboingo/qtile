@@ -38,7 +38,6 @@ import xcffib.xproto
 
 from libqtile import command_interface, hook, utils, window
 from libqtile.backend.x11 import xcbq
-from libqtile.backend.x11.xcore import XCore
 from libqtile.command_client import InteractiveCommandClient
 from libqtile.command_interface import IPCCommandServer, QtileCommandInterface
 from libqtile.command_object import (
@@ -49,7 +48,6 @@ from libqtile.command_object import (
 from libqtile.config import Click, Drag, Match, Rule
 from libqtile.config import ScratchPad as ScratchPadConfig
 from libqtile.config import Screen
-from libqtile.confreader import Config, ConfigError
 from libqtile.dgroups import DGroups
 from libqtile.extension.base import _Extension
 from libqtile.group import _Group
@@ -59,32 +57,6 @@ from libqtile.scratchpad import ScratchPad
 from libqtile.state import QtileState
 from libqtile.utils import get_cache_dir, send_notification
 from libqtile.widget.base import _Widget
-
-
-def validate_config(file_path):
-    """
-    Validate a configuration file.
-
-    This function reloads and imports the given configuration file.
-    It re-raises a ConfigError with a detailed message for any caught exception.
-    """
-    output = [
-        "The configuration file '",
-        file_path,
-        "' generated the following error:\n\n",
-    ]
-
-    try:
-        Config.from_file(XCore(), file_path)
-
-    except ConfigError as error:
-        output.append(str(error))
-        raise ConfigError("".join(output))
-
-    except Exception as error:
-        # Handle SyntaxError and the likes
-        output.append("{}: {}".format(sys.exc_info()[0].__name__, str(error)))
-        raise ConfigError("".join(output))
 
 
 def _import_module(module_name, dir_path):
@@ -289,6 +261,20 @@ class Qtile(CommandObject):
         logger.debug('Stopping qtile')
         self._stopped_event.set()
 
+    def restart(self):
+        argv = [sys.executable] + sys.argv
+        if '--no-spawn' not in argv:
+            argv.append('--no-spawn')
+        buf = io.BytesIO()
+        try:
+            pickle.dump(QtileState(self), buf, protocol=0)
+        except:  # noqa: E722
+            logger.error("Unable to pickle qtile state")
+        argv = [s for s in argv if not s.startswith('--with-state')]
+        argv.append('--with-state=' + buf.getvalue().decode())
+        self._restart = (sys.executable, argv)
+        self.stop()
+
     async def finalize(self):
         self._eventloop.remove_signal_handler(signal.SIGINT)
         self._eventloop.remove_signal_handler(signal.SIGTERM)
@@ -383,6 +369,9 @@ class Qtile(CommandObject):
         keysym, modmask, mask_key = self.core.lookup_key(key)
         self.core.grab_key(keysym, modmask)
         self.keys_map[(keysym, mask_key)] = key
+
+    def ungrab_keys(self) -> None:
+        self.core.ungrab_keys()
 
     def ungrab_key(self, key) -> None:
         keysym, modmask, mask_key = self.core.lookup_key(key)
@@ -1110,27 +1099,23 @@ class Qtile(CommandObject):
         d.state = modmasks
         self.core.handle_KeyPress(d)
 
+    def cmd_validate_config(self):
+        try:
+            self.config.load()
+        except Exception as error:
+            send_notification("Configuration check", str(error.__context__))
+        else:
+            send_notification("Configuration check", "No error found!")
+
     def cmd_restart(self):
         """Restart qtile"""
         try:
-            validate_config(self.config.file_path)
-        except ConfigError as error:
-            logger.error("Preventing restart because of a configuration error: " + str(error))
-            send_notification("Configuration error", str(error))
+            self.config.load()
+        except Exception as error:
+            logger.error("Preventing restart because of a configuration error: {}".format(error))
+            send_notification("Configuration error", str(error.__context__))
             return
-
-        argv = [sys.executable] + sys.argv
-        if '--no-spawn' not in argv:
-            argv.append('--no-spawn')
-        buf = io.BytesIO()
-        try:
-            pickle.dump(QtileState(self), buf, protocol=0)
-        except:  # noqa: E722
-            logger.error("Unable to pickle qtile state")
-        argv = [s for s in argv if not s.startswith('--with-state')]
-        argv.append('--with-state=' + buf.getvalue().decode())
-        self._restart = (sys.executable, argv)
-        self.stop()
+        self.restart()
 
     def cmd_spawn(self, cmd):
         """Run cmd in a shell.

@@ -55,6 +55,12 @@ class Key:
         self.key = key
         self.commands = commands
         self.desc = desc
+        self.children = []
+
+    def add_children(self, *children):
+        """Add children to this key"""
+        for child in children:
+            self.children.append(child)
 
     def __repr__(self):
         return "<Key (%s, %s)>" % (self.modifiers, self.key)
